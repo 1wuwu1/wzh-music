@@ -8,6 +8,7 @@
   <title>RE:KG</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23239BFF'/><text x='50' y='72' font-size='56' font-weight='700' fill='white' text-anchor='middle' font-family='Arial,sans-serif'>RE</text></svg>">
   <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/karaoke.css">
 </head>
 <body>
   <!-- 壁纸层:透明 WebGL canvas 之下(DOM 顺序保证 canvas 在其上) -->
@@ -50,6 +51,7 @@
             <button data-view="recommend" class="nav-item active"><span class="nav-ico">✨</span>推荐</button>
             <button data-view="rank" class="nav-item"><span class="nav-ico">🏆</span>榜单</button>
             <button data-view="album" class="nav-item"><span class="nav-ico">💿</span>专辑</button>
+            <button data-view="karaoke" class="nav-item"><span class="nav-ico">🎤</span>K 歌</button>
             <button data-view="my" class="nav-item"><span class="nav-ico">📁</span>我的歌单</button>
           </nav>
           <main class="main" id="main"></main>
@@ -74,6 +76,7 @@
           <div class="np-artist" id="np-artist">从右侧挑选一首歌开始音乐之旅</div>
         </div>
         <button id="lyric-toggle" class="chip" title="歌词">词</button>
+        <button id="karaoke-btn" class="chip" title="进入 K 歌模式">K歌</button>
         <button id="desktop-lyrics-btn" class="chip" title="桌面歌词(独立小窗)">桌词</button>
         <button id="dl-lock-btn" class="chip" title="锁定桌面歌词(锁定后鼠标可穿透)" hidden>🔓</button>
       </div>
@@ -127,6 +130,124 @@
   <button id="ui-show-btn" class="chip" title="显示界面(Esc)">显示界面</button>
 
   <div class="toasts" id="toasts"></div>
+
+  <!-- K 歌工作台:独立于日常播放器,使用专用音轨和录音混音管线 -->
+  <section class="karaoke-page" id="karaoke-page" aria-hidden="true" aria-label="K 歌模式">
+    <header class="karaoke-top">
+      <button class="karaoke-back" id="karaoke-close" title="返回音乐">← 返回音乐</button>
+      <div class="karaoke-heading">
+        <strong>RE:KG 唱吧</strong>
+        <span id="karaoke-header-status">选择一首歌开唱</span>
+      </div>
+      <button class="karaoke-import" id="karaoke-history-btn">成长档案</button>
+      <button class="karaoke-import" id="karaoke-import">导入伴奏</button>
+      <input id="karaoke-file" type="file" accept="audio/*,.mp3,.flac,.wav,.m4a,.aac,.ogg" hidden>
+    </header>
+
+    <main class="karaoke-main">
+      <div class="karaoke-visual">
+        <div class="karaoke-record" id="karaoke-record">
+          <img id="karaoke-cover" alt="" src="">
+          <span class="karaoke-record-hole"></span>
+        </div>
+        <div class="karaoke-time">
+          <span id="karaoke-time">00:00 / --:--</span>
+          <div class="karaoke-meter" aria-hidden="true">
+            <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+          </div>
+          <div class="karaoke-live-card" aria-live="polite">
+            <span>实时音高 <b id="karaoke-live-note">--</b></span>
+            <span>人声状态 <b id="karaoke-live-level">等待</b></span>
+            <strong id="karaoke-live-score">--</strong>
+          </div>
+        </div>
+      </div>
+
+      <div class="karaoke-copy">
+        <div class="karaoke-song-meta">
+          <div>
+            <h1 id="karaoke-song-name">选择一首歌开始</h1>
+            <p id="karaoke-song-artist">支持酷狗伴奏匹配，也可以导入本地伴奏</p>
+          </div>
+          <span class="karaoke-source" id="karaoke-source">待选择</span>
+        </div>
+        <div class="karaoke-lyrics" aria-live="polite">
+          <div class="karaoke-line prev" id="karaoke-line-prev"></div>
+          <div class="karaoke-line current" id="karaoke-line-current">准备好后，点击“开始演唱”</div>
+          <div class="karaoke-line next" id="karaoke-line-next"></div>
+        </div>
+        <div class="karaoke-status" id="karaoke-status">麦克风只在录音期间使用，录音保存在本机。</div>
+      </div>
+    </main>
+
+    <footer class="karaoke-console">
+      <div class="karaoke-actions">
+        <button class="karaoke-primary" id="karaoke-start">开始演唱</button>
+        <button class="karaoke-stop" id="karaoke-stop" hidden>结束并生成作品</button>
+        <button class="karaoke-secondary" id="karaoke-replay" hidden>重新演唱</button>
+        <button class="karaoke-secondary" id="karaoke-loop-btn">循环本句</button>
+        <button class="karaoke-secondary" id="karaoke-loop-clear" hidden>整首</button>
+      </div>
+
+      <div class="karaoke-mix" aria-label="音量控制">
+        <label>
+          <span>原唱</span>
+          <input id="karaoke-original-volume" type="range" min="0" max="100" value="0">
+          <b id="karaoke-original-value">0%</b>
+        </label>
+        <label>
+          <span>伴奏</span>
+          <input id="karaoke-backing-volume" type="range" min="0" max="100" value="78">
+          <b id="karaoke-backing-value">78%</b>
+        </label>
+        <label>
+          <span>人声</span>
+          <input id="karaoke-voice-volume" type="range" min="0" max="100" value="88">
+          <b id="karaoke-voice-value">88%</b>
+        </label>
+      </div>
+
+      <div class="karaoke-review" id="karaoke-review" hidden>
+        <audio id="karaoke-review-audio" controls preload="metadata"></audio>
+        <a id="karaoke-download" class="karaoke-download" download>下载作品</a>
+      </div>
+    </footer>
+
+    <aside class="karaoke-report" id="karaoke-report" hidden aria-label="演唱评分报告">
+      <div class="karaoke-report-card">
+        <header>
+          <div>
+            <span class="karaoke-report-kicker">智能演唱报告</span>
+            <h2 id="karaoke-report-song">本次作品</h2>
+          </div>
+          <button class="karaoke-import" id="karaoke-report-close">收起报告</button>
+        </header>
+        <div class="karaoke-report-score">
+          <div class="karaoke-score-ring">
+            <strong id="karaoke-report-score">0</strong>
+            <span>综合分</span>
+          </div>
+          <div class="karaoke-report-summary">
+            <b id="karaoke-report-grade">D</b>
+            <p id="karaoke-report-summary">等待分析</p>
+            <div class="karaoke-report-mini" id="karaoke-report-mini"></div>
+          </div>
+        </div>
+        <div class="karaoke-report-metrics" id="karaoke-report-metrics"></div>
+        <div class="karaoke-report-coach">
+          <span>AI 练习建议</span>
+          <p id="karaoke-report-coach">正在根据本次声音特征生成建议…</p>
+        </div>
+        <div class="karaoke-report-lines">
+          <h3>需要重点练习</h3>
+          <div id="karaoke-report-lines"></div>
+        </div>
+      </div>
+    </aside>
+
+    <audio id="karaoke-backing" crossorigin="anonymous" preload="auto"></audio>
+    <audio id="karaoke-original" crossorigin="anonymous" preload="auto"></audio>
+  </section>
 
   <!-- 扫码登录弹窗 -->
   <div class="login-modal" id="login-modal">

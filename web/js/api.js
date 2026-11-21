@@ -24,14 +24,18 @@ function joinArtists(authors, fallback) {
   return joined || fallback || '未知歌手';
 }
 
-/** 统一歌曲结构:{hash,name,artists,img,duration} */
+/** 统一歌曲结构:{hash,hash320,name,artists,img,albumId,duration,mixId,fileName} */
 function normSong(raw) {
   return {
     hash: raw.hash || '',
+    hash320: raw.hash320 || '',
     name: raw.name || '未知歌曲',
     artists: raw.artists || '未知歌手',
     img: raw.img || '',
+    albumId: raw.albumId || '',
     duration: raw.duration,
+    mixId: raw.mixId || '',
+    fileName: raw.fileName || '',
   };
 }
 
@@ -48,6 +52,9 @@ export async function getRecommendSongs() {
       name: s.songname,
       artists: joinArtists(s.singerinfo, s.author_name),
       img: s.sizable_cover,
+      albumId: s.album_id || '',
+      mixId: s.mixsongid || s.album_audio_id || '',
+      fileName: s.filename || '',
       duration: s.time_length
         ? s.time_length >= 1000
           ? Math.round(s.time_length / 1000)
@@ -87,6 +94,9 @@ export async function getRankSongs(rankid, bannerImg = '') {
       name: s.songname,
       artists: joinArtists(s.authors, s.author_name),
       img: bannerImg,
+      albumId: s.album_id || '',
+      mixId: s.mixsongid || s.album_audio_id || ai?.mixsongid || '',
+      fileName: s.filename || '',
       duration: ms ? Math.round(ms / 1000) : undefined,
     });
   });
@@ -96,7 +106,7 @@ export async function getRankSongs(rankid, bannerImg = '') {
 
 /** 专辑搜索 → [{albumid,albumname,singer,img,intro}] */
 export async function searchAlbums(keywords) {
-  const d = await getJson('/search', { keywords, type: 'album', pagesize: 24 });
+  const d = await getJson('/search', { keywords, type: 'album', pagesize: 24, timestamp: Date.now() });
   return (d?.data?.lists || []).map((a) => ({
     albumid: a.albumid,
     albumname: a.albumname || '未知专辑',
@@ -116,6 +126,9 @@ export async function getAlbumSongs(albumid) {
       name: s.base?.audio_name,
       artists: joinArtists(s.authors, s.base?.author_name),
       img: typeof s.album_info === 'string' ? s.album_info : s.album_info?.cover || '',
+      albumId: s.album_id || '',
+      mixId: s.mixsongid || s.album_audio_id || s.audio_info?.mixsongid || '',
+      fileName: s.filename || s.base?.filename || '',
       duration: s.audio_info?.duration ? Math.round(s.audio_info.duration / 1000) : undefined,
     })
   );
@@ -139,6 +152,9 @@ function mapLyricChannel(p) {
     name: p.SongName || '未知歌曲',
     artists: p.SingerName || '未知歌手',
     img: p.Image || '',
+    albumId: p.AlbumID || p.AlbumId || '',
+    mixId: p.MixSongID || p.mixsongid || p.AlbumAudioID || p.album_audio_id || '',
+    fileName: p.FileName || `${p.SingerName || ''} - ${p.SongName || ''}`,
     duration: p.TimeLength || undefined, // 秒
   });
 }
@@ -153,6 +169,9 @@ function mapSongChannel(p) {
     name: p.OriSongName || (dash > 0 ? file.slice(dash + 3) : file) || '未知歌曲',
     artists: p.SingerName || '未知歌手',
     img: p.Image || p.AlbumImage || '',
+    albumId: p.AlbumID || p.AlbumId || '',
+    mixId: p.MixSongID || p.mixsongid || p.AlbumAudioID || p.album_audio_id || '',
+    fileName: p.FileName || '',
     duration: p.Duration || undefined, // 秒
   });
 }
@@ -196,13 +215,13 @@ export function rankByRelevance(songs, keywords) {
 export async function searchSongs(keywords) {
   let songs = [];
   try {
-    const d = await getJson('/search', { keywords, type: 'song', pagesize: 30 });
+    const d = await getJson('/search', { keywords, type: 'song', pagesize: 30, timestamp: Date.now() });
     songs = (d?.data?.lists || []).map(mapSongChannel).filter((s) => s.hash);
   } catch {
     songs = [];
   }
   if (!songs.length) {
-    const d = await getJson('/search', { keywords, type: 'lyric', pagesize: 30 });
+    const d = await getJson('/search', { keywords, type: 'lyric', pagesize: 30, timestamp: Date.now() });
     songs = (d?.data?.lists || []).map(mapLyricChannel).filter((s) => s.hash);
   }
   return rankByRelevance(songs, keywords);
@@ -212,7 +231,7 @@ export async function searchSongs(keywords) {
 
 /** 歌单搜索 → [{specialid,specialname,nickname,img,playCount}] */
 export async function searchPlaylists(keywords) {
-  const d = await getJson('/search', { keywords, type: 'special', pagesize: 24 });
+  const d = await getJson('/search', { keywords, type: 'special', pagesize: 24, timestamp: Date.now() });
   return (d?.data?.lists || []).map((p) => ({
     specialid: p.specialid,
     specialname: p.specialname || '未知歌单',
@@ -370,6 +389,33 @@ export async function getSongUrlVip(hash, quality = '320') {
   } catch {
     return [];
   }
+}
+
+/**
+ * 酷狗 K 歌伴奏匹配。
+ * 返回的 hash 可以直接交给本地 /api/url 解析为可播放 mp3。
+ * 没有匹配到伴奏时返回 {ok:false}，由 K 歌页面提示用户导入本地伴奏。
+ */
+export async function getAccompaniment(song) {
+  const fileName = song.fileName || `${song.artists || ''} - ${song.name || ''}`;
+  const d = await getJson('/audio/accompany/matching', {
+    hash: song.hash,
+    mixId: song.mixId || 0,
+    fileName,
+    timestamp: Date.now(),
+  });
+  const info = d?.data;
+  if (Number(d?.status) !== 1 || !info?.hash) {
+    return { ok: false, error: info?.remark || '暂无匹配伴奏' };
+  }
+  return {
+    ok: true,
+    hash: info.hash,
+    songId: info.songid || info.accompanySongId || '',
+    name: String(info.songname || song.name || '').trim(),
+    artists: info.singername || song.artists || '',
+    duration: Number(info.duration) > 0 ? Math.round(Number(info.duration) / 1000) : null,
+  };
 }
 
 // ---------- 登录 / VIP ----------

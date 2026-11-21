@@ -9,11 +9,24 @@
  * 桌词小窗:setWindowOpenHandler 拦截 window.open('/desktop-lyrics.html'),
  * 覆写为无边框透明置顶 BrowserWindow;页面内 moveBy 拖动/7s 自关逻辑零改动。
  */
-const { app, BrowserWindow, Menu, dialog, ipcMain, utilityProcess, screen } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, session, utilityProcess, screen } = require('electron');
 const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
 const fs = require('node:fs');
+
+// 便携/测试模式：显式指定 userData，避免受限环境无法写 %APPDATA%\REKG。
+// 正式启动不设置该环境变量，仍使用系统默认目录。
+if (process.env.REKG_USER_DATA_DIR) {
+  const runtimeData = path.resolve(process.env.REKG_USER_DATA_DIR);
+  fs.mkdirSync(runtimeData, { recursive: true });
+  app.setPath('userData', runtimeData);
+  app.setPath('sessionData', path.join(runtimeData, 'session'));
+}
+
+// 部分旧显卡/远程桌面环境下 Chromium GPU 子进程会直接退出；
+// 设置 REKG_DISABLE_GPU=1 可强制走 CPU 渲染，页面仍保留 2D 可视化回退。
+if (process.env.REKG_DISABLE_GPU === '1') app.disableHardwareAcceleration();
 
 // 安全:打包版剥离调试端口开关(--remote-debugging-port 等会让任何本机进程
 // 无鉴权接管 CDP)。逃生门 REKG_ALLOW_DEBUG=1 仅供交付测试机(CLAUDE.md 测试约定)。
@@ -124,8 +137,32 @@ function forkService(entry, env, tag) {
   return p;
 }
 
+/**
+ * K 歌录音权限：只允许 REKG 本地页面的音频输入。
+ * 不开放摄像头、屏幕共享、剪贴板或其他第三方来源。
+ */
+function configureMediaPermissions() {
+  const trustedPage = (url) => /^http:\/\/(localhost|127\.0\.0\.1):3001\//i.test(String(url || ''));
+  const ses = session.defaultSession;
+  ses.setPermissionRequestHandler((webContents, permission, callback, details = {}) => {
+    const source = details.requestingUrl || webContents.getURL();
+    const mediaTypes = Array.isArray(details.mediaTypes) ? details.mediaTypes : [];
+    const audioOnly =
+      (mediaTypes.includes('audio') || details.mediaType === 'audio') &&
+      !mediaTypes.includes('video');
+    callback(permission === 'media' && trustedPage(source) && audioOnly);
+  });
+  ses.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details = {}) => (
+    permission === 'media' &&
+    trustedPage(requestingOrigin) &&
+    details.mediaType === 'audio'
+  ));
+}
+
 // ---------- 启动 ----------
 async function bootstrap() {
+  configureMediaPermissions();
+
   // 端口预检(单实例锁已挡自身双开,这里挡 start.bat 等服务占用)
   for (const p of [API_PORT, WEB_PORT]) {
     if (await portBusy(p)) {
@@ -161,12 +198,19 @@ async function bootstrap() {
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
+      additionalArguments: process.env.REKG_SAFE_MODE === '1' ? ['--rekg-safe-mode=1'] : [],
     },
   });
   installWindowOpenHandler(mainWindow);
 
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.on('closed', () => { mainWindow = null; app.quit(); });
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[vmp:main] render process gone:', details.reason, details.exitCode);
+  });
+  mainWindow.webContents.on('did-fail-load', (_event, code, description, url) => {
+    console.error('[vmp:main] page load failed:', code, description, url);
+  });
   // 内存优化:最小化/还原通知渲染进程(lifecycle.js 据此挂起壁纸视频解码与 3D 渲染)
   mainWindow.on('minimize', () => mainWindow.webContents.send('app:hidden', true));
   mainWindow.on('restore', () => mainWindow.webContents.send('app:hidden', false));

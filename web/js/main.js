@@ -17,7 +17,8 @@ import { initLifecycle, onHidden, onVisible } from './lifecycle.js';
 const canvas = document.getElementById('starfield');
 // 一次性画布探测 WebGL:绝不能在真实 #starfield 上探测(上下文锁定会废掉 2D 回退)
 const probe = document.createElement('canvas');
-const glOk = !!(window.WebGLRenderingContext && (probe.getContext('webgl2') || probe.getContext('webgl')));
+const safeMode = window.__APP_CONFIG__?.safeMode === true;
+const glOk = !safeMode && !!(window.WebGLRenderingContext && (probe.getContext('webgl2') || probe.getContext('webgl')));
 let viz = null;
 if (glOk && typeof THREE !== 'undefined') {
   try {
@@ -26,10 +27,21 @@ if (glOk && typeof THREE !== 'undefined') {
     window.__APP_VIZ3D = viz;   // CDP 测试标记(电影运镜断言)
   } catch { viz = null; }
 }
-if (!viz) {
+if (!viz && !safeMode) {
   viz = new Visualizer(canvas);
   window.__APP_STARFIELD_3D = '0';
   window.__APP_VIZ2D = viz;    // CDP 测试标记
+}
+if (safeMode) {
+  // 兼容模式：旧显卡或远程桌面无法创建稳定的 GPU/Canvas 环境时，保留播放全部功能。
+  canvas.style.display = 'none';
+  viz = {
+    setAnalyser() {},
+    setPlaying() {},
+    setSuspended() {},
+  };
+  window.__APP_STARFIELD_3D = '0';
+  window.__APP_SAFE_MODE = '1';
 }
 player.on('analyserready', (a) => viz.setAnalyser(a));
 player.on('statechange', (s) => viz.setPlaying(s === 'playing'));

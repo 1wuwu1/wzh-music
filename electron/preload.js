@@ -7,6 +7,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('__APP_CONFIG__', {
   electron: true,
+  safeMode: process.argv.includes('--rekg-safe-mode=1'),
   API_BASE: 'http://localhost:3000',
   URL_API: 'http://localhost:3001/api/url',
   PLAYLIST_API: 'http://localhost:3001/api/playlist',

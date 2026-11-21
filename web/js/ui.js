@@ -5,6 +5,7 @@
 import * as api from './api.js';
 import { player } from './player.js';
 import { LyricsView, findLineIndex } from './lyrics.js';
+import { initKaraoke, openKaraokeForCurrent, renderKaraokePicker } from './karaoke.js';
 import * as localMusic from './local-music.js';
 import { fixImgUrl, formatTime, escapeHtml, PLACEHOLDER_IMG } from './utils.js';
 import { isTransOn, setTransOn, getKeyStatus, saveKey, clearKey, persistKey } from './translate.js';
@@ -439,6 +440,7 @@ function showView(name, param) {
     case 'rank': return renderRankList();
     case 'song': return renderSongSearch(param ?? pendingSearch);
     case 'album': return renderAlbumSearch(param ?? pendingSearch);
+    case 'karaoke': return renderKaraokePicker(el.main);
     case 'playlist': return renderPlaylistSearch(param ?? pendingSearch);
     case 'my': return renderMyPlaylists();
     case 'user': return renderUserPage();
@@ -1445,6 +1447,8 @@ function toggleLyricFull(force) {
 
 // ---------- 初始化 ----------
 export function initUI() {
+  initKaraoke({ toast });
+
   // 播放条/歌词抽屉封面失败兜底(CSP 下无内联 onerror;常驻监听,换 src 后同样受保护)
   [el.npCover, el.lyricCover].forEach((img) => {
     img.addEventListener('error', () => {
@@ -1499,6 +1503,7 @@ export function initUI() {
   el.btnMute.addEventListener('click', () => player.setMuted(!player.muted));
   el.lyricToggle.addEventListener('click', () => toggleLyric());
   el.lyricClose.addEventListener('click', () => toggleLyric(false));
+  $('karaoke-btn')?.addEventListener('click', openKaraokeForCurrent);
 
   // ---------- AI 歌词翻译:开关 + 密钥设置 ----------
   // 密钥只存在本地服务(写 %APPDATA%\REKG\llm-key.txt),页面只拿掩码。

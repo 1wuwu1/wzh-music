@@ -690,6 +690,78 @@ async function proxyTranslate(req, res) {
   }
 }
 
+const COACH_SYSTEM = [
+  '你是流行演唱教练。用户会给出一次 K 歌练习的数值评分、人声特征和薄弱歌词。',
+  '请用简体中文写 3 到 5 句具体建议：先肯定一个优点，再指出一个最主要问题，最后给出下一次可直接执行的练习方法。',
+  '不要复述全部数字，不要编造音高是否准确；音准指标只代表基频稳定度。',
+  '建议应包含呼吸、进入时机、强弱层次或麦克风距离中的一到两项。总字数控制在 220 字以内。',
+].join('\n');
+
+async function proxyCoach(req, res) {
+  const body = await readJsonBody(req, 32768);
+  if (!body || typeof body !== 'object') return sendJson(res, 400, { ok: false, error: 'bad request' });
+  const metrics = body.metrics && typeof body.metrics === 'object' ? body.metrics : {};
+  const voice = body.voice && typeof body.voice === 'object' ? body.voice : {};
+  const weakLines = Array.isArray(body.weakLines)
+    ? body.weakLines.slice(0, 5).map((line) => String(line || '').slice(0, 120)).filter(Boolean)
+    : [];
+  const payload = {
+    song: String(body.song || '').slice(0, 120),
+    metrics: Object.fromEntries(
+      Object.entries(metrics)
+        .slice(0, 8)
+        .map(([key, value]) => [String(key).slice(0, 32), Number(value)])
+    ),
+    voice: Object.fromEntries(
+      Object.entries(voice)
+        .slice(0, 8)
+        .map(([key, value]) => [String(key).slice(0, 32), Number.isFinite(Number(value)) ? Number(value) : String(value).slice(0, 40)])
+    ),
+    weakLines,
+  };
+  if (LLM_MOCK) {
+    return sendJson(res, 200, {
+      ok: true,
+      mock: true,
+      text: '这次节奏进入比较稳定。建议下次重点练习副歌长音，先用慢速循环两次再恢复正常速度，并保持麦克风距离稳定。',
+    });
+  }
+  if (!llmKey) return sendJson(res, 200, { ok: false, reason: 'nokey' });
+
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), LLM_TIMEOUT);
+  try {
+    const response = await fetch(LLM_URL, {
+      method: 'POST',
+      signal: ac.signal,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${llmKey}` },
+      body: JSON.stringify({
+        model: LLM_MODEL,
+        temperature: 0.55,
+        max_tokens: 450,
+        stream: false,
+        messages: [
+          { role: 'system', content: COACH_SYSTEM },
+          { role: 'user', content: JSON.stringify(payload) },
+        ],
+      }),
+    });
+    if (!response.ok) {
+      return sendJson(res, 200, { ok: false, reason: 'upstream', status: response.status });
+    }
+    const data = await response.json();
+    const text = String(data?.choices?.[0]?.message?.content || '').trim().slice(0, 1600);
+    return sendJson(res, 200, text ? { ok: true, text } : { ok: false, reason: 'empty' });
+  } catch (error) {
+    return sendJson(res, 200, {
+      ok: false,
+      reason: error?.name === 'AbortError' ? 'timeout' : 'error',
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const server = http.createServer((req, res) => {
   let url;
   try {
@@ -709,6 +781,11 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/api/translate') {
     if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
     return proxyTranslate(req, res);
+  }
+
+  if (url.pathname === '/api/coach') {
+    if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+    return proxyCoach(req, res);
   }
 
   if (req.method !== 'GET' && req.method !== 'HEAD') {
